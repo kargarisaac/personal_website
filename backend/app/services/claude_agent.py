@@ -76,6 +76,9 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+CONTENT_ROOT = _repo_root() / "backend" / "content"
+
+
 def _agent_path(agent_name: str) -> Path:
     return _repo_root() / ".claude" / "agents" / f"{agent_name}.md"
 
@@ -104,6 +107,30 @@ def _build_system_prompt(prompt: str, skills: Iterable[str]) -> str:
             " Use the Skill tool to invoke them when appropriate."
         )
     return system_prompt
+
+
+def _extract_tool_paths(tool_input: dict[str, object]) -> list[str]:
+    path_keys = ("file_path", "path", "directory", "paths")
+    paths: list[str] = []
+    for key in path_keys:
+        value = tool_input.get(key)
+        if isinstance(value, str) and value.strip():
+            paths.append(value)
+        elif isinstance(value, (list, tuple)):
+            paths.extend([item for item in value if isinstance(item, str) and item.strip()])
+    return paths
+
+
+def _is_path_allowed(raw_path: str) -> bool:
+    candidate = Path(raw_path.strip())
+    if not candidate.is_absolute():
+        candidate = CONTENT_ROOT / candidate
+    try:
+        resolved = candidate.resolve(strict=False)
+        resolved.relative_to(CONTENT_ROOT)
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def load_agent_config(agent_name: str) -> AgentConfig:
@@ -295,12 +322,23 @@ class ClaudeAgent:
         model: str,
         provider_env: dict[str, str],
     ) -> ClaudeSDKClient:
+        async def can_use_tool(tool: str, tool_input: dict | None) -> bool:
+            if tool not in ("Read", "Grep", "Glob"):
+                return False
+            if not isinstance(tool_input, dict):
+                return False
+            paths = _extract_tool_paths(tool_input)
+            if not paths:
+                return False
+            return all(_is_path_allowed(path) for path in paths)
+
         options_dict: dict[str, object] = {
             "cwd": str(_repo_root()),
             "system_prompt": self.system_prompt,
-            "permission_mode": "bypassPermissions",
+            "permission_mode": "default",
             "setting_sources": ["project"],
             "model": model,
+            "can_use_tool": can_use_tool,
         }
 
         if provider_env:
