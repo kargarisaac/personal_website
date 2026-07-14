@@ -5,3 +5,5 @@ frontend/node_modules/
 .env
 __pycache__/
 */__pycache__/
+.DS_Store
+*.pdf
